@@ -1,0 +1,231 @@
+---
+title: "Machine Learning - Predicting how participants perform exercises"
+author: "Eamon C"
+date: '2021'
+output:
+  html_document: 
+    keep_md: yes
+  
+---
+
+## Summary
+This project constructs and tests various prediction models to predict the manner or how well participants perform barbell lifts (correctly or incorrectly). The 'classe' variable in the training set predicts the manner in which they did the exercise and I use data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants to make predictions. The project identifies the most relevant features and applies a model-based approach to detect mistakes in exercise techniques. Data cleaning processing and analysis is carried out on the datasets and cross validation techniques applied. In this exercise I build and test various prediction models including Trees, Boosting and Random Forest. The Out of Sample Error is then calculated using the most accurate model, Random Forest (accuracy of 0.994), and this model is applied to a set of twenty different independent test cases.
+
+More information is available from the Pontifical Catholic University of Rio de Janeiro website:
+[puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+I would like to thank PUC Rio for their generosity in providing access to their Human Activity Recognition datasets.
+
+Exercise Techniques:
+
+A Execution of exercise according to specification.
+
+B Throwing elbows to the front.
+
+C Lifting dumbbell only half way.
+
+D Lowering the dumbbell only halfway.
+
+E Throwing the hips to the front.
+
+## Loading & Data Processing
+
+```{r Packages, message=F, warning=F}
+library(plyr);library(dplyr);library(caret)
+library(ggplot2); library(rattle)
+```
+
+```{r Data download}
+#if (!file.exists('data')) {
+#      dir.create('data')
+#}
+#fileUrl <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+#download.file(fileUrl, destfile = './data/pml_training.csv', method='curl')
+#fileUrl <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+#download.file(fileUrl, destfile = './data/pml_testing.csv', method='curl')
+list.files('./data')
+
+#datadownloaded <- date()
+```
+
+
+```{r Read Data}
+pml_training <- read.csv('./data/pml_training.csv',na.strings=c('#DIV/0!', 'NA'))
+pml_testing <- read.csv('./data/pml_testing.csv', na.strings=c('#DIV/0!', 'NA'))
+```
+
+## Exploratory Data Analysis
+Check the dataset's dimensions, variables and characteristics.
+```{r check}
+dim(pml_training);dim(pml_testing);
+table(pml_training$user_name)
+tbl_df(pml_training[,8:50])
+summary(pml_training[,8:20])
+sum(is.na(pml_training$max_roll_belt)) #example of NAs
+
+```
+The data is multi-dimensional / multi-class and it is difficult to get a picture of what's 
+going on. Reading the data into R initially we see some measurements with mislabelled entries (#DIV/0!). 
+Some 53 variables have a large numbers of NAs (see 'max_roll_belt' example above), usually 19216+ out of a total of 19622 observations.Although the values in these columns appear genuine they do appear to be summary values rather than measurements.
+We will remove the mislabelled entries when reading the data into R and also the variables with a large number of NAs.
+We will further reduce the columns by removing time related and non-accelerometer measurement labels.
+These changes will also be applied to the pml_testing dataset. 
+
+```{r data cleaning }
+pml_training <- pml_training[, -(1:7)]
+withNA <- colSums(is.na(pml_training)) ==0
+namesWithNA <- names(pml_training[,withNA])
+pml_training <- pml_training[, namesWithNA]
+
+pml_testing <- pml_testing[, -(1:7)]
+withNA <- colSums(is.na(pml_testing)) ==0
+namesWithNA <- names(pml_testing[,withNA])
+pml_testing <- pml_testing[, namesWithNA]
+
+dim(pml_training);dim(pml_testing);
+
+```
+
+We can also check and ensure there are no Zero Covariates (variables with no variability). In this case there are none.
+```{r nsv }
+nsv <- nearZeroVar(pml_training, saveMetrics=TRUE)
+head(nsv)
+#cont ...
+
+```
+
+We identify Variables that are highly correlated using the 'highlycorrelated' function.
+```{r Correlated Variables}
+
+highlycorrelated <- function(dataframe,numToReport)
+{
+      # find the correlations in dataset
+      cormatrix <- cor(dataframe[sapply(dataframe, is.numeric)])
+      # set correlations on the diagonal or lower triangle to 0,
+      diag(cormatrix) <- 0
+      cormatrix[lower.tri(cormatrix)] <- 0
+      # convert matrix to a dataframe
+      df <- as.data.frame(as.table(cormatrix))
+      names(df) <- c("1st Variable", "2nd Variable","Correlation")
+      # sort correlations from highest to lowest
+      head(df[order(abs(df$Correlation),decreasing=T),],n=numToReport)
+}
+highlycorrelated(pml_training, 12)
+
+```
+
+
+We remove correlated variables from the datasets.
+```{r Remove Correlated Variables}
+
+cormatrix <- cor(pml_training[sapply(pml_training, is.numeric)])
+corrVars <- findCorrelation(cormatrix, cutoff =0.90)
+pml_training <- pml_training[,-corrVars]
+pml_testing <- pml_testing[,-corrVars] #pml_testing dataset
+
+dim(pml_training); dim(pml_testing)
+
+```
+
+## Cross Validation
+The pml_training dataset will be split into training and test sets. The training and test datasets
+will be used to create and then test the prediction model respectively. The chosen model will then be 
+employed to predict 20 different test cases (pml_testing dataset).
+
+```{r validation }
+set.seed(123)
+inTrain <- createDataPartition(y=pml_training$classe, p=0.75, list=FALSE)
+training <- pml_training[inTrain,]
+testing <- pml_training[-inTrain,]
+dim(training); dim(testing)
+```
+
+## Predict with Trees
+#### Build the Trees Prediction Model
+```{r trees }
+modFitTree <- train(classe ~., method ='rpart', data=training)
+print(modFitTree$finalModel)
+fancyRpartPlot(modFitTree$finalModel)
+
+```
+
+#### Predict the test dataset using the Trees Model
+
+```{r predict test}
+
+predTree <- predict(modFitTree, newdata=testing)
+cmTree <- confusionMatrix(predTree, testing$classe)
+print(cmTree)
+
+```
+As we can see that this model has a pretty poor accuracy at just 0.49.
+
+## Predict with Random Forest
+#### Build the RF Prediction Model
+
+Note: trainControl method parameter is set to 'cv' rather than bootstrapping, which is the default.
+
+```{r RF, message=F, warning=F}
+trControl <- trainControl(method='cv', number=5, allowParallel=TRUE, verbose=F)
+modFitRF <- train(classe~., data=training, method='rf', trControl=trControl)
+
+```
+```{r RF output}
+print(modFitRF)
+print(modFitRF$finalModel)
+
+```
+
+#### Predict the test dataset using the RF Model
+```{r RF predict}
+predRF <- predict(modFitRF, newdata=testing)
+cmRF <- confusionMatrix(predRF, testing$classe)
+cmRF
+
+```
+This particular model shows a very high accuarcy.
+
+## Predict with Boosting
+#### Build the Prediction Model
+
+```{r Boosting, results='hide',message=F, warning=F}
+trControl <- trainControl(method='cv', number=10, allowParallel=TRUE, verbose=F)
+modFitGBM <- train(classe~., data=training, method='gbm', trControl=trControl)
+
+```
+
+```{r GBM output}
+print(modFitGBM)
+print(modFitGBM$finalModel)
+
+```
+
+#### Predict the test dataset using the GBM Model
+```{r GBM predict}
+predGBM <- predict(modFitGBM, newdata=testing)
+cmGBM <- confusionMatrix(predGBM, testing$classe)
+cmGBM
+
+```
+This model also has a high accuracy but not as high as the Random Forest Model.
+
+## Accuracy Results for all Models 
+```{r Accuracy}
+results <- c(cmTree$overall[1], cmRF$overall[1], cmGBM$overall[1])
+names(results) <- c('Trees','RF', 'GBM')
+print(results)
+
+```
+Considering all three models we can say that the Random Forest model has the highest accuracy.
+Therefore the Random forest model will be used to predict the 20 different test cases.
+
+## Predicting the Out of Sample Error
+#### Predict the pml_testing dataset
+```{r predict final}
+prediction <- predict(modFitRF, newdata=pml_testing)
+#print(prediction)
+
+predResults <- data.frame(test_case = pml_testing$problem_id, Prediction = prediction)
+print(predResults)
+
+```
